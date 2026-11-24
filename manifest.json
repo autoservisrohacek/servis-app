@@ -1,0 +1,35 @@
+
+{
+  "name": "AutoService Pro DB",
+  "short_name": "AutoServis",
+  "description": "Profesionální systém pro správu zákazníků, vozidel a zakázek",
+  "id": "autoservice-pro-db-v1",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#2563eb",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "https://cdn.jsdelivr.net/gh/lucide-react/lucide@latest/icons/wrench.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "https://cdn.jsdelivr.net/gh/lucide-react/lucide@latest/icons/wrench.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "https://cdn.jsdelivr.net/gh/lucide-react/lucide@latest/icons/wrench.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ],
+  "categories": ["business", "productivity"],
+  "screenshots": []
+}

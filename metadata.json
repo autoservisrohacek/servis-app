@@ -1,0 +1,7 @@
+{
+  "name": "Autoservis Roháček Pro",
+  "description": "Profesionální systém pro správu zákazníků, vozidel a servisní historie s integrovanou AI diagnostikou a P2P synchronizací.",
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

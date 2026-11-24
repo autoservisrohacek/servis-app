@@ -1,0 +1,834 @@
+import React, { useState, useEffect } from 'react';
+import { 
+  StyleSheet, 
+  Text, 
+  View, 
+  TextInput, 
+  TouchableOpacity, 
+  ScrollView, 
+  Switch, 
+  Alert, 
+  SafeAreaView, 
+  StatusBar,
+  FlatList
+} from 'react-native';
+
+// Typy pro offline data a stav formuláře
+interface Customer {
+  id: string;
+  firstName: string;
+  lastName: string;
+  companyName?: string;
+  phone: string;
+}
+
+interface Vehicle {
+  id: string;
+  customerId: string;
+  licensePlate: string;
+  make: string;
+  model: string;
+  vin: string;
+}
+
+interface MobileCheckIn {
+  vehicleId: string | null;
+  licensePlate: string;
+  make: string;
+  model: string;
+  mileage: number;
+  fuelLevel: string;
+  equipment: {
+    spareTyre: boolean;       // Rezerva
+    securityKey: boolean;     // Bezpečnostní klíč kola
+    jack: boolean;            // Zvedák
+    triangle: boolean;        // Trojúhelník
+    wheelWrench: boolean;     // Klíč kolový
+    firstAid: boolean;        // Lékárna
+    tyreKit: boolean;         // Sada na lepení pneu
+  };
+  notes: string;
+}
+
+export default function App() {
+  // Offline lokální databáze (kartotéka) pro práci na dvoře bez signálu
+  const [offlineCustomers, setOfflineCustomers] = useState<Customer[]>([
+    { id: 'c1', firstName: 'Jan', lastName: 'Novák', phone: '+420 777 123 456' },
+    { id: 'c2', firstName: 'Petr', lastName: 'Svoboda', companyName: 'Autodoprava Svoboda s.r.o.', phone: '+420 602 987 654' },
+    { id: 'c3', firstName: 'Marie', lastName: 'Černá', phone: '+420 731 555 444' }
+  ]);
+
+  const [offlineVehicles, setOfflineVehicles] = useState<Vehicle[]>([
+    { id: 'v1', customerId: 'c1', licensePlate: '3AI 5595', make: 'Škoda', model: 'Octavia III', vin: 'TMBJJ7NE8H012345' },
+    { id: 'v2', customerId: 'c1', licensePlate: '9A5 1122', make: 'Škoda', model: 'Fabia II', vin: 'TMBHA26Y19045612' },
+    { id: 'v3', customerId: 'c2', licensePlate: '1US 9802', make: 'Volkswagen', model: 'Passat B8', vin: 'WVWZZZ3CZGP09871' },
+    { id: 'v4', customerId: 'c3', licensePlate: '7U7 6188', make: 'Ford', model: 'Focus', vin: 'WF0FXXGCDFBP4455' }
+  ]);
+
+  // Vyhledávání v kartotéce on-the-fly
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<Vehicle[]>([]);
+  const [selectedVehicle, setSelectedVehicle] = useState<Vehicle | null>(null);
+
+  // Stav formuláře příjmu vozu
+  const [isManualInput, setIsManualInput] = useState(false);
+  const [manualLicensePlate, setManualLicensePlate] = useState('');
+  const [manualMake, setManualMake] = useState('');
+  const [manualModel, setManualModel] = useState('');
+
+  const [mileage, setMileage] = useState('');
+  const [fuelLevel, setFuelLevel] = useState('50%'); // PHM defaultních 50%
+  
+  // Checklist souznění (striktní shoda s PC editorem)
+  const [equipment, setEquipment] = useState({
+    spareTyre: false,      // Rezerva
+    securityKey: false,    // Bezpečnostní klíč kola
+    jack: false,           // Zvedák
+    triangle: false,       // Trojúhelník
+    wheelWrench: false,    // Klíč kolový
+    firstAid: false,       // Lékárna
+    tyreKit: false,        // Sada na lepení pneu
+  });
+
+  const [notes, setNotes] = useState('');
+  const [targetIp, setTargetIp] = useState('192.168.1.100'); // Automaticky předvyplněná IP adresa pro odesílání do PC
+
+  // Načtení IP adresy z lokálního úložiště při startu
+  useEffect(() => {
+    const loadSavedIp = async () => {
+      try {
+        let saved = null;
+        if (typeof localStorage !== 'undefined') {
+          saved = localStorage.getItem('mobile_target_ip');
+        }
+        if (!saved) {
+          try {
+            const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+            if (AsyncStorage) {
+              saved = await AsyncStorage.getItem('mobile_target_ip');
+            }
+          } catch (e1) {
+            try {
+              const { AsyncStorage } = require('react-native');
+              if (AsyncStorage) {
+                saved = await AsyncStorage.getItem('mobile_target_ip');
+              }
+            } catch (e2) {}
+          }
+        }
+        if (saved) {
+          setTargetIp(saved);
+        }
+      } catch (err) {
+        console.warn('Nepodařilo se načíst IP adresu:', err);
+      }
+    };
+    loadSavedIp();
+  }, []);
+
+  // Automatické uložení IP adresy při změně
+  const handleUpdateIp = async (newIp: string) => {
+    setTargetIp(newIp);
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem('mobile_target_ip', newIp);
+      }
+      try {
+        const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+        if (AsyncStorage) {
+          await AsyncStorage.setItem('mobile_target_ip', newIp);
+        }
+      } catch (e1) {
+        try {
+          const { AsyncStorage } = require('react-native');
+          if (AsyncStorage) {
+            await AsyncStorage.setItem('mobile_target_ip', newIp);
+          }
+        } catch (e2) {}
+      }
+    } catch (err) {
+      console.warn('Nepodařilo se uložit IP adresu:', err);
+    }
+  };
+
+  // Vyhledávací filtr pro offline kartotéku
+  useEffect(() => {
+    if (searchQuery.trim() === '') {
+      setSearchResults([]);
+      return;
+    }
+
+    const query = searchQuery.toLowerCase();
+    const filtered = offlineVehicles.filter(v => {
+      const customer = offlineCustomers.find(c => c.id === v.customerId);
+      const ownerName = customer ? `${customer.firstName} ${customer.lastName} ${customer.companyName || ''}`.toLowerCase() : '';
+      
+      return (
+        v.licensePlate.toLowerCase().includes(query) ||
+        v.vin.toLowerCase().includes(query) ||
+        v.make.toLowerCase().includes(query) ||
+        v.model.toLowerCase().includes(query) ||
+        ownerName.includes(query)
+      );
+    });
+    setSearchResults(filtered);
+  }, [searchQuery]);
+
+  // Volba předdefinované PHM stupnice v 10% krocích (striktně 0% až 100%)
+  const fuelSteps = ['0%', '10%', '20%', '30%', '40%', '50%', '60%', '70%', '80%', '90%', '100%'];
+
+  const handleSelectVehicle = (vehicle: Vehicle) => {
+    setSelectedVehicle(vehicle);
+    setIsManualInput(false);
+    setSearchQuery('');
+  };
+
+  const handleSwitchToManual = () => {
+    setSelectedVehicle(null);
+    setIsManualInput(true);
+    setSearchQuery('');
+  };
+
+  const toggleEquipment = (key: keyof typeof equipment) => {
+    setEquipment(prev => ({
+      ...prev,
+      [key]: !prev[key]
+    }));
+  };
+
+  // Reset celého formuláře pro další vozidlo
+  const resetForm = () => {
+    setSelectedVehicle(null);
+    setIsManualInput(false);
+    setSearchQuery('');
+    setManualLicensePlate('');
+    setManualMake('');
+    setManualModel('');
+    setMileage('');
+    setFuelLevel('50%');
+    setEquipment({
+      spareTyre: false,
+      securityKey: false,
+      jack: false,
+      triangle: false,
+      wheelWrench: false,
+      firstAid: false,
+      tyreKit: false,
+    });
+    setNotes('');
+  };
+
+  // Generování validního JSON balíčku odpovídajícího schématu v PC verzi na jedno kliknutí a síťový přenos
+  const handleNetworkSend = () => {
+    const finalLicensePlate = selectedVehicle ? selectedVehicle.licensePlate : manualLicensePlate;
+    const finalMake = selectedVehicle ? selectedVehicle.make : manualMake;
+    const finalModel = selectedVehicle ? selectedVehicle.model : manualModel;
+
+    if (!finalLicensePlate.trim()) {
+      Alert.alert('Chyba validace', 'Uveďte prosím SPZ / Registrační značku vozidla.');
+      return;
+    }
+
+    const payload: MobileCheckIn = {
+      vehicleId: selectedVehicle ? selectedVehicle.id : null,
+      licensePlate: finalLicensePlate.toUpperCase(),
+      make: finalMake || 'Neznámá značka',
+      model: finalModel || 'Neznámý model',
+      mileage: parseInt(mileage, 10) || 0,
+      fuelLevel: fuelLevel,
+      equipment: equipment,
+      notes: notes.trim()
+    };
+
+    console.log('Síťový LAN přenos na IP:', targetIp, JSON.stringify(payload, null, 2));
+
+    Alert.alert(
+      'Odeslání příjmu do PC',
+      `Odesílám balíček pro vůz ${payload.licensePlate} (${payload.make} ${payload.model}) na Váš počítač přes IP: ${targetIp.trim()} a port 3003.\n\nStav km: ${payload.mileage}\nPalivo: ${payload.fuelLevel}\nZávada: ${payload.notes || 'Bez poznámky'}`,
+      [
+        { text: 'Storno', style: 'cancel' },
+        { 
+          text: 'ODESLAT DO PC', 
+          onPress: async () => {
+            try {
+              const cleanedIp = targetIp.trim();
+              const response = await fetch(`http://${cleanedIp}:3003/`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(payload)
+              });
+
+              if (response.ok) {
+                Alert.alert(
+                  'Přenos úspěšný!', 
+                  'Zakázka byla odeslána. Na Vašem PC se právě otevřel nový předvyplněný zakázkový list.',
+                  [{ text: 'V pořádku', onPress: resetForm }]
+                );
+              } else {
+                throw new Error(`Kód odpovědi: ${response.status}`);
+              }
+            } catch (error: any) {
+              Alert.alert(
+                'Přenos selhal',
+                `Nepodařilo se spojit s PC na adrese http://${targetIp.trim()}:3003.\n\nUjistěte se, že:\n1. Telefon a PC jsou na stejné Wi-Fi síti.\n2. V programu Autoservis na PC je spuštěna služba příjmu.\n\nChyba: ${error.message || error}`,
+                [{ text: 'Zpět' }]
+              );
+            }
+          } 
+        }
+      ]
+    );
+  };
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <StatusBar barStyle="light-content" backgroundColor="#0f172a" />
+      
+      {/* Záhlaví aplikace */}
+      <View style={styles.header}>
+        <Text style={styles.headerTitle}>AUTOSERVIS PŘÍJEM</Text>
+        <Text style={styles.headerSubtitle}>Mobilní offline terminál — Fáze 3</Text>
+      </View>
+
+      <ScrollView style={styles.scrollContainer} keyboardShouldPersistTaps="handled">
+        {/* Sekce: Nastavení spojení s PC */}
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>NASTAVENÍ SPOJENÍ S PC</Text>
+          <Text style={styles.sectionHelp}>Zadejte lokální IP adresu Vašeho PC, na kterém běží Autoservis (Port: 3003):</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Např. 192.168.1.127"
+            placeholderTextColor="#94a3b8"
+            value={targetIp}
+            onChangeText={handleUpdateIp}
+          />
+        </View>
+
+        {/* Sekce: Vyhledání / Výběr vozidla z offline paměti */}
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>1. VÝBĚR VOZIDLA Z KARTOTÉKY</Text>
+          <Text style={styles.sectionHelp}>Vyhledávejte podle SPZ, VIN, Modelu nebo Jména zákazníka bez internetu.</Text>
+          
+          <TextInput
+            style={styles.input}
+            placeholder="Zadejte SPZ, VIN nebo jméno zákazníka..."
+            placeholderTextColor="#94a3b8"
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+          />
+
+          {searchResults.length > 0 && (
+            <View style={styles.searchResultsContainer}>
+              {searchResults.map((item) => {
+                const customer = offlineCustomers.find(c => c.id === item.customerId);
+                return (
+                  <TouchableOpacity 
+                    key={item.id} 
+                    style={styles.searchResultItem}
+                    onPress={() => handleSelectVehicle(item)}
+                  >
+                    <View style={styles.spzBadge}>
+                      <Text style={styles.spzText}>{item.licensePlate}</Text>
+                    </View>
+                    <View style={styles.vehicleInfo}>
+                      <Text style={styles.vehicleName}>{item.make} {item.model}</Text>
+                      <Text style={styles.vehicleOwner}>Majitel: {customer ? `${customer.firstName} ${customer.lastName}` : 'Neznámý'}</Text>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          )}
+
+          {/* Vizualizace vybraného auta */}
+          {selectedVehicle ? (
+            <View style={styles.selectedVehicleContainer}>
+              <Text style={styles.selectedHeading}>VYBRANÉ VOZIDLO:</Text>
+              <Text style={styles.selectedText}>{selectedVehicle.make} {selectedVehicle.model} ({selectedVehicle.licensePlate})</Text>
+              <Text style={styles.selectedSubtext}>VIN: {selectedVehicle.vin}</Text>
+              <TouchableOpacity style={styles.resetButton} onPress={() => setSelectedVehicle(null)}>
+                <Text style={styles.resetButtonText}>Zrušit výběr</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <TouchableOpacity 
+              style={[styles.manualButton, isManualInput && styles.manualButtonActive]} 
+              onPress={handleSwitchToManual}
+            >
+              <Text style={[styles.manualButtonText, isManualInput && styles.manualButtonTextActive]}>
+                {isManualInput ? '✓ RUČNÍ PŘÍJEM (NOVÝ VŮZ) AKTIVNÍ' : '➕ RUČNÍ PŘÍJEM (NOVÝ VŮZ)'}
+              </Text>
+            </TouchableOpacity>
+          )}
+
+          {isManualInput && (
+            <View style={styles.manualFields}>
+              <View style={styles.row}>
+                <View style={styles.col}>
+                  <Text style={styles.label}>SPZ *</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Např. 3AI 5595"
+                    value={manualLicensePlate}
+                    onChangeText={setManualLicensePlate}
+                    autoCapitalize="characters"
+                  />
+                </View>
+              </View>
+              <View style={styles.row}>
+                <View style={{ flex: 1, marginRight: 8 }}>
+                  <Text style={styles.label}>Značka</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Např. Škoda"
+                    value={manualMake}
+                    onChangeText={setManualMake}
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.label}>Model</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Např. Octavia"
+                    value={manualModel}
+                    onChangeText={setManualModel}
+                  />
+                </View>
+              </View>
+            </View>
+          )}
+        </View>
+
+        {/* Sekce : Nájezd kilometrů */}
+         <View style={styles.card}>
+          <Text style={styles.sectionTitle}>2. STAV KILOMETRŮ</Text>
+          <TextInput
+            style={styles.inputLarge}
+            placeholder="0"
+            keyboardType="numeric"
+            value={mileage}
+            onChangeText={setMileage}
+          />
+          <Text style={styles.fieldHelp}>Aktuální stav počitadla kilometrů z palubního počítače vozu.</Text>
+         </View>
+
+        {/* Sekce : Stav paliva (PHM) s 10% kroky */}
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>3. STAV PALIVA (PHM)</Text>
+          <Text style={styles.selectedHeaderVal}>Zvoleno: <Text style={styles.highlightText}>{fuelLevel}</Text></Text>
+          
+          <View style={styles.gridContainer}>
+            {fuelSteps.map((step) => (
+              <TouchableOpacity
+                key={step}
+                style={[
+                  styles.gridItem,
+                  fuelLevel === step && styles.gridItemActive
+                ]}
+                onPress={() => setFuelLevel(step)}
+              >
+                <Text style={[
+                  styles.gridItemText,
+                  fuelLevel === step && styles.gridItemTextActive
+                ]}>
+                  {step}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+
+        {/* Sekce : Povinná Výbava (Checklist souznění) */}
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>4. KONTROLNÍ CHECKLIST VÝBAVY</Text>
+          <Text style={styles.sectionHelp}>Zaškrtněte přítomnou výbavu ve vozidle:</Text>
+
+          <View style={styles.checklistRow}>
+            <Text style={styles.checklinkLabel}>Rezerva</Text>
+            <Switch
+              value={equipment.spareTyre}
+              onValueChange={() => toggleEquipment('spareTyre')}
+              trackColor={{ false: '#cbd5e1', true: '#2563eb' }}
+            />
+          </View>
+
+          <View style={styles.checklistRow}>
+            <Text style={styles.checklinkLabel}>Bezpečnostní klíč kola</Text>
+            <Switch
+              value={equipment.securityKey}
+              onValueChange={() => toggleEquipment('securityKey')}
+              trackColor={{ false: '#cbd5e1', true: '#2563eb' }}
+            />
+          </View>
+
+          <View style={styles.checklistRow}>
+            <Text style={styles.checklinkLabel}>Zvedák</Text>
+            <Switch
+              value={equipment.jack}
+              onValueChange={() => toggleEquipment('jack')}
+              trackColor={{ false: '#cbd5e1', true: '#2563eb' }}
+            />
+          </View>
+
+          <View style={styles.checklistRow}>
+            <Text style={styles.checklinkLabel}>Trojúhelník</Text>
+            <Switch
+              value={equipment.triangle}
+              onValueChange={() => toggleEquipment('triangle')}
+              trackColor={{ false: '#cbd5e1', true: '#2563eb' }}
+            />
+          </View>
+
+          <View style={styles.checklistRow}>
+            <Text style={styles.checklinkLabel}>Klíč kolový</Text>
+            <Switch
+              value={equipment.wheelWrench}
+              onValueChange={() => toggleEquipment('wheelWrench')}
+              trackColor={{ false: '#cbd5e1', true: '#2563eb' }}
+            />
+          </View>
+
+          <View style={styles.checklistRow}>
+            <Text style={styles.checklinkLabel}>Lékárna</Text>
+            <Switch
+              value={equipment.firstAid}
+              onValueChange={() => toggleEquipment('firstAid')}
+              trackColor={{ false: '#cbd5e1', true: '#2563eb' }}
+            />
+          </View>
+
+          <View style={styles.checklistRow}>
+            <Text style={styles.checklinkLabel}>Sada na lepení pneu</Text>
+            <Switch
+              value={equipment.tyreKit}
+              onValueChange={() => toggleEquipment('tyreKit')}
+              trackColor={{ false: '#cbd5e1', true: '#2563eb' }}
+            />
+          </View>
+        </View>
+
+        {/* Sekce : Rozsah opravy (Závada) */}
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>5. ROZSAH OBJEDNANÉ OPRAVY (ZÁVADA)</Text>
+          <TextInput
+            style={styles.notesInput}
+            multiline
+            numberOfLines={4}
+            placeholder="Popište požadavky mechanika nebo zákazníka (např. výměna oleje v motoru a filtrů, kontrola zadních brzdových destiček...)"
+            placeholderTextColor="#94a3b8"
+            value={notes}
+            onChangeText={setNotes}
+          />
+        </View>
+
+        {/* Akční odesílací Bluetooth tlačítko */}
+        <TouchableOpacity style={styles.bluetoothButton} onPress={handleNetworkSend}>
+          <Text style={styles.bluetoothButtonText}>⚡ ODESLAT DO PC PŘES LOKÁLNÍ SÍŤ</Text>
+        </TouchableOpacity>
+        
+        <View style={{ height: 40 }} />
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#f8fafc',
+  },
+  header: {
+    backgroundColor: '#0f172a',
+    paddingVertical: 18,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: '#1e293b',
+  },
+  headerTitle: {
+    color: '#ffffff',
+    fontSize: 20,
+    fontWeight: '900',
+    letterSpacing: 2,
+  },
+  headerSubtitle: {
+    color: '#94a3b8',
+    fontSize: 11,
+    fontWeight: '700',
+    marginTop: 4,
+    textTransform: 'uppercase',
+  },
+  scrollContainer: {
+    padding: 16,
+  },
+  card: {
+    backgroundColor: '#ffffff',
+    borderRadius: 24,
+    padding: 20,
+    marginBottom: 16,
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    elevation: 2,
+    borderWidth: 1,
+    borderColor: '#f1f5f9',
+  },
+  sectionTitle: {
+    fontSize: 13,
+    fontWeight: '950',
+    color: '#1e293b',
+    marginBottom: 8,
+    letterSpacing: 0.5,
+  },
+  sectionHelp: {
+    fontSize: 11,
+    color: '#64748b',
+    marginBottom: 12,
+    lineHeight: 16,
+    fontWeight: '600',
+  },
+  input: {
+    backgroundColor: '#f8fafc',
+    borderWidth: 1.5,
+    borderColor: '#e2e8f0',
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    color: '#1e293b',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  inputLarge: {
+    backgroundColor: '#f8fafc',
+    borderWidth: 1.5,
+    borderColor: '#e2e8f0',
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 18,
+    color: '#1e293b',
+    fontSize: 22,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  fieldHelp: {
+    fontSize: 10,
+    color: '#64748b',
+    marginTop: 6,
+    textAlign: 'center',
+    fontWeight: '700',
+  },
+  searchResultsContainer: {
+    backgroundColor: '#f8fafc',
+    borderWidth: 1.5,
+    borderColor: '#e2e8f0',
+    borderRadius: 16,
+    padding: 8,
+    marginTop: 10,
+  },
+  searchResultItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+  },
+  spzBadge: {
+    backgroundColor: '#e2e8f0',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    marginRight: 12,
+  },
+  spzText: {
+    fontSize: 13,
+    fontWeight: '900',
+    color: '#0f172a',
+  },
+  vehicleInfo: {
+    flex: 1,
+  },
+  vehicleName: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#1e293b',
+  },
+  vehicleOwner: {
+    fontSize: 11,
+    color: '#64748b',
+    marginTop: 2,
+    fontWeight: '600',
+  },
+  selectedVehicleContainer: {
+    backgroundColor: '#eff6ff',
+    borderWidth: 1.5,
+    borderColor: '#bfdbfe',
+    borderRadius: 16,
+    padding: 14,
+    marginTop: 12,
+  },
+  selectedHeading: {
+    fontSize: 9,
+    fontWeight: '950',
+    color: '#2563eb',
+    letterSpacing: 1,
+  },
+  selectedText: {
+    fontSize: 15,
+    fontWeight: '900',
+    color: '#1e3a8a',
+    marginTop: 2,
+  },
+  selectedSubtext: {
+    fontSize: 11,
+    color: '#3b82f6',
+    marginTop: 1,
+    fontWeight: '700',
+  },
+  resetButton: {
+    marginTop: 10,
+    alignSelf: 'flex-start',
+    backgroundColor: '#dbeafe',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  resetButtonText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#2563eb',
+  },
+  manualButton: {
+    backgroundColor: '#f1f5f9',
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+    marginTop: 12,
+    borderWidth: 1.5,
+    borderColor: '#e2e8f0',
+  },
+  manualButtonActive: {
+    backgroundColor: '#ecfdf5',
+    borderColor: '#a7f3d0',
+  },
+  manualButtonText: {
+    fontSize: 12,
+    fontWeight: '900',
+    color: '#475569',
+  },
+  manualButtonTextActive: {
+    color: '#059669',
+  },
+  manualFields: {
+    marginTop: 14,
+    borderTopWidth: 1,
+    borderTopColor: '#f1f5f9',
+    paddingTop: 12,
+  },
+  row: {
+    flexDirection: 'row',
+    marginBottom: 10,
+  },
+  col: {
+    flex: 1,
+  },
+  label: {
+    fontSize: 10,
+    fontWeight: '900',
+    color: '#64748b',
+    marginBottom: 4,
+    textTransform: 'uppercase',
+  },
+  selectedHeaderVal: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#475569',
+    marginBottom: 10,
+  },
+  highlightText: {
+    color: '#2563eb',
+    fontWeight: '900',
+  },
+  gridContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginHorizontal: -4,
+  },
+  gridItem: {
+    width: '20%',
+    padding: 4,
+    aspectRatio: 1.2,
+  },
+  gridItemActive: {
+    backgroundColor: 'transparent',
+  },
+  gridItemText: {
+    backgroundColor: '#f8fafc',
+    borderWidth: 1.5,
+    borderColor: '#e2e8f0',
+    borderRadius: 10,
+    textAlign: 'center',
+    textAlignVertical: 'center',
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#64748b',
+    height: '100%',
+    lineHeight: 28,
+  },
+  gridItemTextActive: {
+    backgroundColor: '#2563eb',
+    borderColor: '#2563eb',
+    color: '#ffffff',
+    shadowColor: '#2563eb',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  checklistRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f8fafc',
+  },
+  checklinkLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#334155',
+  },
+  notesInput: {
+    backgroundColor: '#f8fafc',
+    borderWidth: 1.5,
+    borderColor: '#e2e8f0',
+    borderRadius: 16,
+    padding: 14,
+    color: '#1e293b',
+    fontSize: 13,
+    fontWeight: '700',
+    minHeight: 100,
+    textAlignVertical: 'top',
+  },
+  bluetoothButton: {
+    backgroundColor: '#2563eb',
+    borderRadius: 20,
+    paddingVertical: 16,
+    alignItems: 'center',
+    shadowColor: '#2563eb',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 4,
+    marginTop: 8,
+  },
+  bluetoothButtonText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '950',
+    letterSpacing: 0.5,
+  }
+});
